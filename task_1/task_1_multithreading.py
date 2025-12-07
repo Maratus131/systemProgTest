@@ -1,64 +1,49 @@
-import csv
-import os
-import time
+from flask import Flask, request, jsonify
 import requests
-import concurrent.futures
-
-import psutil
-from bs4 import BeautifulSoup
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from test_0412.task_1.parser import parse_content
-from test_0412.task_1.urls import URLS, OUTPUT_FILE_THREADS
+from test_0412.task_1.urls import OUTPUT_FILE_THREADS
 from test_0412.task_1.utils import write_to_csv
 
+app = Flask(__name__)
 
-def fetch_text(url: str):
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        return resp.text
-    except Exception as e:
-        print(f"Ошибка запроса {url}: {e}")
-        return None
+all_products = []
+total_sum = 0.0
+lock = threading.Lock()
 
-def worker(url: str):
-    html = fetch_text(url)
-    data, total = parse_content(html)
+executor = ThreadPoolExecutor(max_workers=50)
 
-    if data:
-        print(f"Страница {url} имеет {len(data)} товаров.")
-    else:
-        print(f"Страница {url}: товаров нет или произошла ошибка.")
+def fetch_and_parse(url):
+    response = requests.get(url, timeout=10)
+    html = response.text
+    return parse_content(html)
 
-    return data, total
-
-
-def threads_main():
-    process = psutil.Process(os.getpid())
-    start_time = time.time()
-    start_mem = process.memory_info().rss / 1024 / 1024
-
-    print("Старт многопоточного парсинга")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        results = list(executor.map(worker, URLS))
-
-    all_products = []
-    total_sum = 0.0
-
-    for data, page_sum in results:
-        all_products.extend(data)
+def handle_url(url):
+    products, page_sum = fetch_and_parse(url)
+    with lock:
+        all_products.extend(products)
+        global total_sum
         total_sum += page_sum
+        write_to_csv(OUTPUT_FILE_THREADS, all_products)
+        all_products.clear()
+    return len(products), page_sum
 
-    write_to_csv(OUTPUT_FILE_THREADS, all_products)
+@app.route("/parse", methods=["POST"])
+def handle_request():
+    data = request.get_json()
+    url = data["url"]
+    print(f"[THREAD SERVER] Получен URL: {url}")
 
-    duration = time.time() - start_time
-    end_mem = process.memory_info().rss / 1024 / 1024
+    future = executor.submit(handle_url, url)
+    count, page_sum = future.result()
 
-    print("\n--- Итоги ---")
-    print(f"Обработано страниц: {len(URLS)}")
-    print(f"Всего товаров: {len(all_products)}")
-    print(f"Общая сумма: {total_sum:,.2f} руб.")
-    print(f"Время выполнения: {duration:.2f} сек")
-    print(f"Использовано памяти: {end_mem - start_mem:.2f} МБ")
+    return jsonify({
+        "count": count,
+        "sum": page_sum
+    })
 
+if __name__ == "__main__":
+    print("[THREAD SERVER] HTTP-многопоточный сервер запущен на 127.0.0.1:8085")
+    app.run(host="127.0.0.1", port=8085, threaded=True)

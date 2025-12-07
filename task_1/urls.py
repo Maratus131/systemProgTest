@@ -1,4 +1,3 @@
-
 URLS = [
     "https://dental-first.ru/catalog/",
     "https://dental-first.ru/catalog/stomatologicheskie-materialy/polirovochnye-sredstva/diadent/",
